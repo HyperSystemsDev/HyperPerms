@@ -575,31 +575,104 @@ public final class MariaDBStorageProvider implements StorageProvider {
         });
     }
 
-    // ==================== Track Operations (TODO) ====================
+    // ==================== Track Operations ====================
 
     @Override
     public CompletableFuture<Optional<Track>> loadTrack(@NotNull String name) {
-        throw new UnsupportedOperationException("TODO");
+        return CompletableFuture.supplyAsync(() -> {
+            try (Connection conn = dataSource.getConnection()) {
+                String sql = "SELECT * FROM tracks WHERE name = ?";
+                try (PreparedStatement stmt = conn.prepareStatement(sql)) {
+                    stmt.setString(1, name.toLowerCase());
+                    ResultSet rs = stmt.executeQuery();
+
+                    if (!rs.next()) {
+                        return Optional.<Track>empty();
+                    }
+
+                    String groupsJson = rs.getString("groups_json");
+                    List<String> groups = parseGroupsList(groupsJson);
+
+                    return Optional.of(new Track(rs.getString("name"), groups));
+                }
+            } catch (SQLException e) {
+                Logger.severe("Failed to load track: " + name, e);
+                return Optional.<Track>empty();
+            }
+        });
     }
 
     @Override
     public CompletableFuture<Void> saveTrack(@NotNull Track track) {
-        throw new UnsupportedOperationException("TODO");
+        return CompletableFuture.runAsync(() -> {
+            try (Connection conn = dataSource.getConnection()) {
+                String sql = """
+                    INSERT INTO tracks (name, groups_json) VALUES (?, ?)
+                    ON DUPLICATE KEY UPDATE groups_json = VALUES(groups_json)
+                """;
+                try (PreparedStatement stmt = conn.prepareStatement(sql)) {
+                    stmt.setString(1, track.getName());
+                    stmt.setString(2, serializeGroupsList(track.getGroups()));
+                    stmt.executeUpdate();
+                }
+            } catch (SQLException e) {
+                Logger.severe("Failed to save track: " + track.getName(), e);
+            }
+        });
     }
 
     @Override
     public CompletableFuture<Void> deleteTrack(@NotNull String name) {
-        throw new UnsupportedOperationException("TODO");
+        return CompletableFuture.runAsync(() -> {
+            try (Connection conn = dataSource.getConnection();
+                 PreparedStatement stmt = conn.prepareStatement("DELETE FROM tracks WHERE name = ?")) {
+                stmt.setString(1, name.toLowerCase());
+                stmt.executeUpdate();
+            } catch (SQLException e) {
+                Logger.severe("Failed to delete track: " + name, e);
+            }
+        });
     }
 
     @Override
     public CompletableFuture<Map<String, Track>> loadAllTracks() {
-        throw new UnsupportedOperationException("TODO");
+        return CompletableFuture.supplyAsync(() -> {
+            Map<String, Track> tracks = new HashMap<>();
+            try (Connection conn = dataSource.getConnection()) {
+                String sql = "SELECT * FROM tracks";
+                try (Statement stmt = conn.createStatement();
+                     ResultSet rs = stmt.executeQuery(sql)) {
+                    while (rs.next()) {
+                        String trackName = rs.getString("name");
+                        String groupsJson = rs.getString("groups_json");
+                        List<String> groups = parseGroupsList(groupsJson);
+                        tracks.put(trackName, new Track(trackName, groups));
+                    }
+                }
+            } catch (SQLException e) {
+                Logger.severe("Failed to load all tracks", e);
+            }
+            return tracks;
+        });
     }
 
     @Override
     public CompletableFuture<Set<String>> getTrackNames() {
-        throw new UnsupportedOperationException("TODO");
+        return CompletableFuture.supplyAsync(() -> {
+            Set<String> names = new HashSet<>();
+            try (Connection conn = dataSource.getConnection()) {
+                String sql = "SELECT name FROM tracks";
+                try (Statement stmt = conn.createStatement();
+                     ResultSet rs = stmt.executeQuery(sql)) {
+                    while (rs.next()) {
+                        names.add(rs.getString("name"));
+                    }
+                }
+            } catch (SQLException e) {
+                Logger.severe("Failed to get track names", e);
+            }
+            return names;
+        });
     }
 
     // ==================== Backup Operations (TODO) ====================
