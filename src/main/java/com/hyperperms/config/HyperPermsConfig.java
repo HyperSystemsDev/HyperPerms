@@ -137,6 +137,19 @@ public final class HyperPermsConfig {
             migrated = true;
         }
 
+        // Migration: Add useSSL to mysql storage config if missing
+        if (config.has("storage") && config.get("storage").isJsonObject()) {
+            JsonObject storage = config.getAsJsonObject("storage");
+            if (storage.has("mysql") && storage.get("mysql").isJsonObject()) {
+                JsonObject mysql = storage.getAsJsonObject("mysql");
+                if (!mysql.has("useSSL")) {
+                    mysql.addProperty("useSSL", false);
+                    Logger.info("Config migration: Added storage.mysql.useSSL setting");
+                    migrated = true;
+                }
+            }
+        }
+
         // Update config version if migration occurred or version is outdated
         if (migrated || compareVersions(configVersion, CURRENT_CONFIG_VERSION) < 0) {
             config.addProperty("configVersion", CURRENT_CONFIG_VERSION);
@@ -226,6 +239,7 @@ public final class HyperPermsConfig {
         mysqlSettings.addProperty("username", "root");
         mysqlSettings.addProperty("password", "");
         mysqlSettings.addProperty("poolSize", 10);
+        mysqlSettings.addProperty("useSSL", false);
         storage.add("mysql", mysqlSettings);
 
         root.add("storage", storage);
@@ -390,6 +404,10 @@ public final class HyperPermsConfig {
 
     public int getMysqlPoolSize() {
         return getNestedInt("storage", "mysql", "poolSize", 10);
+    }
+
+    public boolean getMysqlUseSSL() {
+        return getNestedBoolean("storage", "mysql", "useSSL", false);
     }
 
     public boolean isCacheEnabled() {
@@ -963,6 +981,19 @@ public final class HyperPermsConfig {
             JsonObject obj = config.getAsJsonObject(section);
             if (obj.has(key) && obj.get(key).isJsonPrimitive()) {
                 return obj.get(key).getAsBoolean();
+            }
+        }
+        return defaultValue;
+    }
+
+    private boolean getNestedBoolean(String section, String subsection, String key, boolean defaultValue) {
+        if (config.has(section) && config.get(section).isJsonObject()) {
+            JsonObject obj = config.getAsJsonObject(section);
+            if (obj.has(subsection) && obj.get(subsection).isJsonObject()) {
+                JsonObject sub = obj.getAsJsonObject(subsection);
+                if (sub.has(key) && sub.get(key).isJsonPrimitive()) {
+                    return sub.get(key).getAsBoolean();
+                }
             }
         }
         return defaultValue;
