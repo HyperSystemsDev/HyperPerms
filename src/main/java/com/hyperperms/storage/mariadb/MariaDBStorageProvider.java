@@ -47,8 +47,6 @@ public final class MariaDBStorageProvider implements StorageProvider {
     private final String password;
     private final boolean useSSL;
     private final int maxPoolSize;
-    private final Path dataDirectory;
-
     private final Path backupsDirectory;
 
     private HikariDataSource dataSource;
@@ -65,7 +63,6 @@ public final class MariaDBStorageProvider implements StorageProvider {
         this.password = password;
         this.useSSL = useSSL;
         this.maxPoolSize = maxPoolSize;
-        this.dataDirectory = dataDirectory;
         this.backupsDirectory = dataDirectory.resolve("backups");
     }
 
@@ -105,6 +102,9 @@ public final class MariaDBStorageProvider implements StorageProvider {
                 config.setMinimumIdle(Math.max(1, maxPoolSize / 2));
 
                 dataSource = new HikariDataSource(config);
+
+                // Create directories
+                Files.createDirectories(backupsDirectory);
 
                 // Create tables
                 createTables();
@@ -318,8 +318,6 @@ public final class MariaDBStorageProvider implements StorageProvider {
                 } catch (SQLException e) {
                     conn.rollback();
                     throw e;
-                } finally {
-                    conn.setAutoCommit(true);
                 }
             } catch (SQLException e) {
                 Logger.severe("Failed to save user: " + user.getUuid(), e);
@@ -518,8 +516,6 @@ public final class MariaDBStorageProvider implements StorageProvider {
                 } catch (SQLException e) {
                     conn.rollback();
                     throw e;
-                } finally {
-                    conn.setAutoCommit(true);
                 }
             } catch (SQLException e) {
                 Logger.severe("Failed to save group: " + group.getName(), e);
@@ -1040,16 +1036,15 @@ public final class MariaDBStorageProvider implements StorageProvider {
                 return false;
             }
 
-            try {
-                Files.walk(backupDir)
-                     .sorted(Comparator.reverseOrder())
-                     .forEach(path -> {
-                         try {
-                             Files.delete(path);
-                         } catch (IOException e) {
-                             Logger.warn("Failed to delete: " + path);
-                         }
-                     });
+            try (var walk = Files.walk(backupDir)) {
+                walk.sorted(Comparator.reverseOrder())
+                    .forEach(path -> {
+                        try {
+                            Files.delete(path);
+                        } catch (IOException e) {
+                            Logger.warn("Failed to delete: " + path);
+                        }
+                    });
                 return true;
             } catch (IOException e) {
                 Logger.severe("Failed to delete MariaDB backup: " + name, e);
