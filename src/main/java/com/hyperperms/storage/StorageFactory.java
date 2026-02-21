@@ -2,6 +2,7 @@ package com.hyperperms.storage;
 
 import com.hyperperms.config.HyperPermsConfig;
 import com.hyperperms.storage.json.JsonStorageProvider;
+import com.hyperperms.storage.mariadb.MariaDBStorageProvider;
 import com.hyperperms.storage.sqlite.SQLiteStorageProvider;
 import com.hyperperms.util.Logger;
 import org.jetbrains.annotations.NotNull;
@@ -48,10 +49,18 @@ public final class StorageFactory {
                 }
             }
             case "mysql", "mariadb" -> {
-                // TODO: Implement MySQL storage
-                Logger.warn("MySQL storage not yet implemented, falling back to JSON");
-                Path jsonDir = dataDirectory.resolve(config.getJsonDirectory());
-                yield new JsonStorageProvider(jsonDir);
+                Logger.info("Using MariaDB storage: %s:%d/%s",
+                        config.getMysqlHost(), config.getMysqlPort(), config.getMysqlDatabase());
+                yield new MariaDBStorageProvider(
+                        config.getMysqlHost(),
+                        config.getMysqlPort(),
+                        config.getMysqlDatabase(),
+                        config.getMysqlUsername(),
+                        config.getMysqlPassword(),
+                        config.getMysqlUseSSL(),
+                        config.getMysqlPoolSize(),
+                        dataDirectory
+                );
             }
             default -> {
                 Logger.warn("Unknown storage type '%s', falling back to JSON", type);
