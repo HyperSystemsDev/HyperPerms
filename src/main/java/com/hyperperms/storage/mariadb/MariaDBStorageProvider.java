@@ -96,9 +96,9 @@ public final class MariaDBStorageProvider implements StorageProvider {
                 config.addDataSourceProperty("useUnicode", "true");
 
                 // Pool tuning
-                config.setConnectionTimeout(30000);  // 30 seconds
-                config.setIdleTimeout(600000);        // 10 minutes
-                config.setMaxLifetime(1800000);       // 30 minutes
+                config.setConnectionTimeout(30000);
+                config.setIdleTimeout(600000);
+                config.setMaxLifetime(1800000);
                 config.setMinimumIdle(Math.max(1, maxPoolSize / 2));
 
                 dataSource = new HikariDataSource(config);
