@@ -63,16 +63,16 @@ dependencies {
     // YAML parsing (for LuckPerms migration)
     implementation 'org.yaml:snakeyaml:2.2'
 
-    // Database - HikariCP connection pooling (P5 - deferred, for future MariaDB support)
-    // implementation 'com.zaxxer:HikariCP:6.2.1'
+    // Database - HikariCP connection pooling (for MariaDB support)
+    implementation 'com.zaxxer:HikariCP:6.2.1'
 
     // Database - SQLite JDBC driver (optional - user must download separately)
     // The driver is NOT bundled to keep JAR size small (~4MB vs ~15MB)
     // Users who want SQLite features must download the JAR to plugins/HyperPerms/lib/
     compileOnly 'org.xerial:sqlite-jdbc:3.45.1.0'
 
-    // Database - MariaDB JDBC driver (P5 - deferred)
-    // implementation 'org.mariadb.jdbc:mariadb-java-client:3.5.1'
+    // Database - MariaDB JDBC driver (bundled for MariaDB/MySQL storage)
+    implementation 'org.mariadb.jdbc:mariadb-java-client:3.5.1'
 
     // Redis client for pub/sub and L2 cache (P5 - deferred)
     // implementation 'io.lettuce:lettuce-core:6.5.2.RELEASE'
@@ -151,10 +151,10 @@ shadowJar {
     relocate 'org.yaml.snakeyaml', 'com.hyperperms.lib.snakeyaml'
     // Note: SQLite JDBC cannot be relocated due to native library loading
 
-    // Future relocations when database support is added:
-    // relocate 'com.zaxxer.hikari', 'com.hyperperms.lib.hikari'
-    // relocate 'org.mariadb.jdbc', 'com.hyperperms.lib.mariadb'
-    // relocate 'io.lettuce', 'com.hyperperms.lib.lettuce'
+    // Database support relocations
+    relocate 'com.zaxxer.hikari', 'com.hyperperms.lib.hikari'
+    relocate 'org.mariadb.jdbc', 'com.hyperperms.lib.mariadb'
+    // Future: relocate 'io.lettuce', 'com.hyperperms.lib.lettuce'
 }
 
 test {
