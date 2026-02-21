@@ -393,31 +393,186 @@ public final class MariaDBStorageProvider implements StorageProvider {
         });
     }
 
-    // ==================== Group Operations (TODO) ====================
+    // ==================== Group Operations ====================
 
     @Override
     public CompletableFuture<Optional<Group>> loadGroup(@NotNull String name) {
-        throw new UnsupportedOperationException("TODO");
+        return CompletableFuture.supplyAsync(() -> {
+            try (Connection conn = dataSource.getConnection()) {
+                String sql = "SELECT * FROM `groups` WHERE name = ?";
+                try (PreparedStatement stmt = conn.prepareStatement(sql)) {
+                    stmt.setString(1, name.toLowerCase());
+                    ResultSet rs = stmt.executeQuery();
+
+                    if (!rs.next()) {
+                        return Optional.<Group>empty();
+                    }
+
+                    Group group = new Group(rs.getString("name"), rs.getInt("weight"));
+                    group.setDisplayName(rs.getString("display_name"));
+                    group.setPrefix(rs.getString("prefix"));
+                    group.setSuffix(rs.getString("suffix"));
+                    group.setPrefixPriority(rs.getInt("prefix_priority"));
+                    group.setSuffixPriority(rs.getInt("suffix_priority"));
+
+                    // Load nodes using the same connection
+                    loadGroupNodes(conn, group);
+
+                    return Optional.of(group);
+                }
+            } catch (SQLException e) {
+                Logger.severe("Failed to load group: " + name, e);
+                return Optional.<Group>empty();
+            }
+        });
+    }
+
+    private void loadGroupNodes(Connection conn, Group group) throws SQLException {
+        String sql = "SELECT * FROM group_nodes WHERE group_name = ?";
+        try (PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setString(1, group.getName());
+            ResultSet rs = stmt.executeQuery();
+
+            while (rs.next()) {
+                String permission = rs.getString("permission");
+                boolean value = rs.getInt("value") == 1;
+                Long expiryMs = rs.getObject("expiry") != null ? rs.getLong("expiry") : null;
+                Instant expiry = expiryMs != null ? Instant.ofEpochMilli(expiryMs) : null;
+                ContextSet contexts = deserializeContexts(rs.getString("contexts_json"));
+
+                Node node = Node.builder(permission)
+                    .value(value)
+                    .expiry(expiry)
+                    .contexts(contexts)
+                    .build();
+                group.addNode(node);
+            }
+        }
     }
 
     @Override
     public CompletableFuture<Void> saveGroup(@NotNull Group group) {
-        throw new UnsupportedOperationException("TODO");
+        return CompletableFuture.runAsync(() -> {
+            try (Connection conn = dataSource.getConnection()) {
+                conn.setAutoCommit(false);
+                try {
+                    // Upsert group
+                    String sql = """
+                        INSERT INTO `groups` (name, display_name, weight, prefix, suffix, prefix_priority, suffix_priority)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        ON DUPLICATE KEY UPDATE
+                            display_name = VALUES(display_name),
+                            weight = VALUES(weight),
+                            prefix = VALUES(prefix),
+                            suffix = VALUES(suffix),
+                            prefix_priority = VALUES(prefix_priority),
+                            suffix_priority = VALUES(suffix_priority)
+                    """;
+                    try (PreparedStatement stmt = conn.prepareStatement(sql)) {
+                        stmt.setString(1, group.getName());
+                        stmt.setString(2, group.getDisplayName());
+                        stmt.setInt(3, group.getWeight());
+                        stmt.setString(4, group.getPrefix());
+                        stmt.setString(5, group.getSuffix());
+                        stmt.setInt(6, group.getPrefixPriority());
+                        stmt.setInt(7, group.getSuffixPriority());
+                        stmt.executeUpdate();
+                    }
+
+                    // Clear existing nodes
+                    try (PreparedStatement stmt = conn.prepareStatement(
+                            "DELETE FROM group_nodes WHERE group_name = ?")) {
+                        stmt.setString(1, group.getName());
+                        stmt.executeUpdate();
+                    }
+
+                    // Insert nodes
+                    String nodeSql = """
+                        INSERT INTO group_nodes (group_name, permission, value, expiry, contexts_json)
+                        VALUES (?, ?, ?, ?, ?)
+                    """;
+                    try (PreparedStatement stmt = conn.prepareStatement(nodeSql)) {
+                        for (Node node : group.getNodes()) {
+                            stmt.setString(1, group.getName());
+                            stmt.setString(2, node.getPermission());
+                            stmt.setInt(3, node.getValue() ? 1 : 0);
+                            stmt.setObject(4, node.getExpiry() != null ? node.getExpiry().toEpochMilli() : null);
+                            stmt.setString(5, serializeContexts(node.getContexts()));
+                            stmt.addBatch();
+                        }
+                        stmt.executeBatch();
+                    }
+
+                    conn.commit();
+                } catch (SQLException e) {
+                    conn.rollback();
+                    throw e;
+                } finally {
+                    conn.setAutoCommit(true);
+                }
+            } catch (SQLException e) {
+                Logger.severe("Failed to save group: " + group.getName(), e);
+            }
+        });
     }
 
     @Override
     public CompletableFuture<Void> deleteGroup(@NotNull String name) {
-        throw new UnsupportedOperationException("TODO");
+        return CompletableFuture.runAsync(() -> {
+            try (Connection conn = dataSource.getConnection();
+                 PreparedStatement stmt = conn.prepareStatement("DELETE FROM `groups` WHERE name = ?")) {
+                stmt.setString(1, name.toLowerCase());
+                stmt.executeUpdate();
+            } catch (SQLException e) {
+                Logger.severe("Failed to delete group: " + name, e);
+            }
+        });
     }
 
     @Override
     public CompletableFuture<Map<String, Group>> loadAllGroups() {
-        throw new UnsupportedOperationException("TODO");
+        return CompletableFuture.supplyAsync(() -> {
+            Map<String, Group> groups = new HashMap<>();
+            try (Connection conn = dataSource.getConnection()) {
+                String sql = "SELECT * FROM `groups`";
+                try (Statement stmt = conn.createStatement();
+                     ResultSet rs = stmt.executeQuery(sql)) {
+                    while (rs.next()) {
+                        String name = rs.getString("name");
+                        Group group = new Group(name, rs.getInt("weight"));
+                        group.setDisplayName(rs.getString("display_name"));
+                        group.setPrefix(rs.getString("prefix"));
+                        group.setSuffix(rs.getString("suffix"));
+                        group.setPrefixPriority(rs.getInt("prefix_priority"));
+                        group.setSuffixPriority(rs.getInt("suffix_priority"));
+                        loadGroupNodes(conn, group);
+                        groups.put(name, group);
+                    }
+                }
+            } catch (SQLException e) {
+                Logger.severe("Failed to load all groups", e);
+            }
+            return groups;
+        });
     }
 
     @Override
     public CompletableFuture<Set<String>> getGroupNames() {
-        throw new UnsupportedOperationException("TODO");
+        return CompletableFuture.supplyAsync(() -> {
+            Set<String> names = new HashSet<>();
+            try (Connection conn = dataSource.getConnection()) {
+                String sql = "SELECT name FROM `groups`";
+                try (Statement stmt = conn.createStatement();
+                     ResultSet rs = stmt.executeQuery(sql)) {
+                    while (rs.next()) {
+                        names.add(rs.getString("name"));
+                    }
+                }
+            } catch (SQLException e) {
+                Logger.severe("Failed to get group names", e);
+            }
+            return names;
+        });
     }
 
     // ==================== Track Operations (TODO) ====================
