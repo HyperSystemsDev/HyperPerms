@@ -16,6 +16,7 @@ import com.hyperperms.api.context.ContextSet;
 
 import java.nio.file.Path;
 import java.sql.*;
+import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 
@@ -197,36 +198,199 @@ public final class MariaDBStorageProvider implements StorageProvider {
         return healthy;
     }
 
-    // ==================== User Operations (TODO) ====================
+    // ==================== User Operations ====================
 
     @Override
     public CompletableFuture<Optional<User>> loadUser(@NotNull UUID uuid) {
-        throw new UnsupportedOperationException("TODO");
+        return CompletableFuture.supplyAsync(() -> {
+            try (Connection conn = dataSource.getConnection()) {
+                String sql = "SELECT * FROM users WHERE uuid = ?";
+                try (PreparedStatement stmt = conn.prepareStatement(sql)) {
+                    stmt.setString(1, uuid.toString());
+                    ResultSet rs = stmt.executeQuery();
+
+                    if (!rs.next()) {
+                        return Optional.<User>empty();
+                    }
+
+                    String username = rs.getString("username");
+                    User user = new User(uuid, username);
+                    user.setPrimaryGroup(rs.getString("primary_group"));
+                    user.setCustomPrefix(rs.getString("custom_prefix"));
+                    user.setCustomSuffix(rs.getString("custom_suffix"));
+
+                    // Load nodes using the same connection
+                    loadUserNodes(conn, user);
+
+                    return Optional.of(user);
+                }
+            } catch (SQLException e) {
+                Logger.severe("Failed to load user: " + uuid, e);
+                return Optional.<User>empty();
+            }
+        });
+    }
+
+    private void loadUserNodes(Connection conn, User user) throws SQLException {
+        String sql = "SELECT * FROM user_nodes WHERE user_uuid = ?";
+        try (PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setString(1, user.getUuid().toString());
+            ResultSet rs = stmt.executeQuery();
+
+            while (rs.next()) {
+                String permission = rs.getString("permission");
+                boolean value = rs.getInt("value") == 1;
+                Long expiryMs = rs.getObject("expiry") != null ? rs.getLong("expiry") : null;
+                Instant expiry = expiryMs != null ? Instant.ofEpochMilli(expiryMs) : null;
+                ContextSet contexts = deserializeContexts(rs.getString("contexts_json"));
+
+                Node node = Node.builder(permission)
+                    .value(value)
+                    .expiry(expiry)
+                    .contexts(contexts)
+                    .build();
+                user.addNode(node);
+            }
+        }
     }
 
     @Override
     public CompletableFuture<Void> saveUser(@NotNull User user) {
-        throw new UnsupportedOperationException("TODO");
+        return CompletableFuture.runAsync(() -> {
+            try (Connection conn = dataSource.getConnection()) {
+                conn.setAutoCommit(false);
+                try {
+                    // Upsert user
+                    String sql = """
+                        INSERT INTO users (uuid, username, primary_group, custom_prefix, custom_suffix)
+                        VALUES (?, ?, ?, ?, ?)
+                        ON DUPLICATE KEY UPDATE
+                            username = VALUES(username),
+                            primary_group = VALUES(primary_group),
+                            custom_prefix = VALUES(custom_prefix),
+                            custom_suffix = VALUES(custom_suffix)
+                    """;
+                    try (PreparedStatement stmt = conn.prepareStatement(sql)) {
+                        stmt.setString(1, user.getUuid().toString());
+                        stmt.setString(2, user.getUsername());
+                        stmt.setString(3, user.getPrimaryGroup());
+                        stmt.setString(4, user.getCustomPrefix());
+                        stmt.setString(5, user.getCustomSuffix());
+                        stmt.executeUpdate();
+                    }
+
+                    // Clear existing nodes
+                    try (PreparedStatement stmt = conn.prepareStatement(
+                            "DELETE FROM user_nodes WHERE user_uuid = ?")) {
+                        stmt.setString(1, user.getUuid().toString());
+                        stmt.executeUpdate();
+                    }
+
+                    // Insert nodes
+                    String nodeSql = """
+                        INSERT INTO user_nodes (user_uuid, permission, value, expiry, contexts_json)
+                        VALUES (?, ?, ?, ?, ?)
+                    """;
+                    try (PreparedStatement stmt = conn.prepareStatement(nodeSql)) {
+                        for (Node node : user.getNodes()) {
+                            stmt.setString(1, user.getUuid().toString());
+                            stmt.setString(2, node.getPermission());
+                            stmt.setInt(3, node.getValue() ? 1 : 0);
+                            stmt.setObject(4, node.getExpiry() != null ? node.getExpiry().toEpochMilli() : null);
+                            stmt.setString(5, serializeContexts(node.getContexts()));
+                            stmt.addBatch();
+                        }
+                        stmt.executeBatch();
+                    }
+
+                    conn.commit();
+                } catch (SQLException e) {
+                    conn.rollback();
+                    throw e;
+                } finally {
+                    conn.setAutoCommit(true);
+                }
+            } catch (SQLException e) {
+                Logger.severe("Failed to save user: " + user.getUuid(), e);
+            }
+        });
     }
 
     @Override
     public CompletableFuture<Void> deleteUser(@NotNull UUID uuid) {
-        throw new UnsupportedOperationException("TODO");
+        return CompletableFuture.runAsync(() -> {
+            try (Connection conn = dataSource.getConnection();
+                 PreparedStatement stmt = conn.prepareStatement("DELETE FROM users WHERE uuid = ?")) {
+                stmt.setString(1, uuid.toString());
+                stmt.executeUpdate();
+            } catch (SQLException e) {
+                Logger.severe("Failed to delete user: " + uuid, e);
+            }
+        });
     }
 
     @Override
     public CompletableFuture<Map<UUID, User>> loadAllUsers() {
-        throw new UnsupportedOperationException("TODO");
+        return CompletableFuture.supplyAsync(() -> {
+            Map<UUID, User> users = new HashMap<>();
+            try (Connection conn = dataSource.getConnection()) {
+                String sql = "SELECT * FROM users";
+                try (Statement stmt = conn.createStatement();
+                     ResultSet rs = stmt.executeQuery(sql)) {
+                    while (rs.next()) {
+                        UUID uuid = UUID.fromString(rs.getString("uuid"));
+                        String username = rs.getString("username");
+                        User user = new User(uuid, username);
+                        user.setPrimaryGroup(rs.getString("primary_group"));
+                        user.setCustomPrefix(rs.getString("custom_prefix"));
+                        user.setCustomSuffix(rs.getString("custom_suffix"));
+                        loadUserNodes(conn, user);
+                        users.put(uuid, user);
+                    }
+                }
+            } catch (SQLException e) {
+                Logger.severe("Failed to load all users", e);
+            }
+            return users;
+        });
     }
 
     @Override
     public CompletableFuture<Set<UUID>> getUserUuids() {
-        throw new UnsupportedOperationException("TODO");
+        return CompletableFuture.supplyAsync(() -> {
+            Set<UUID> uuids = new HashSet<>();
+            try (Connection conn = dataSource.getConnection()) {
+                String sql = "SELECT uuid FROM users";
+                try (Statement stmt = conn.createStatement();
+                     ResultSet rs = stmt.executeQuery(sql)) {
+                    while (rs.next()) {
+                        uuids.add(UUID.fromString(rs.getString("uuid")));
+                    }
+                }
+            } catch (SQLException e) {
+                Logger.severe("Failed to get user UUIDs", e);
+            }
+            return uuids;
+        });
     }
 
     @Override
     public CompletableFuture<Optional<UUID>> lookupUuid(@NotNull String username) {
-        throw new UnsupportedOperationException("TODO");
+        return CompletableFuture.supplyAsync(() -> {
+            try (Connection conn = dataSource.getConnection()) {
+                String sql = "SELECT uuid FROM users WHERE LOWER(username) = LOWER(?)";
+                try (PreparedStatement stmt = conn.prepareStatement(sql)) {
+                    stmt.setString(1, username);
+                    ResultSet rs = stmt.executeQuery();
+                    if (rs.next()) {
+                        return Optional.of(UUID.fromString(rs.getString("uuid")));
+                    }
+                }
+            } catch (SQLException e) {
+                Logger.severe("Failed to lookup UUID for: " + username, e);
+            }
+            return Optional.empty();
+        });
     }
 
     // ==================== Group Operations (TODO) ====================
