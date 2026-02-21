@@ -6,6 +6,11 @@ import com.hyperperms.model.Track;
 import com.hyperperms.model.User;
 import com.hyperperms.storage.StorageProvider;
 import com.hyperperms.util.Logger;
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import org.jetbrains.annotations.NotNull;
@@ -14,6 +19,8 @@ import org.jetbrains.annotations.Nullable;
 import com.hyperperms.api.context.Context;
 import com.hyperperms.api.context.ContextSet;
 
+import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.*;
 import java.time.Instant;
@@ -42,8 +49,11 @@ public final class MariaDBStorageProvider implements StorageProvider {
     private final int maxPoolSize;
     private final Path dataDirectory;
 
+    private final Path backupsDirectory;
+
     private HikariDataSource dataSource;
     private volatile boolean healthy = false;
+    private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 
     public MariaDBStorageProvider(@NotNull String host, int port, @NotNull String database,
                                   @NotNull String username, @NotNull String password,
@@ -56,6 +66,7 @@ public final class MariaDBStorageProvider implements StorageProvider {
         this.useSSL = useSSL;
         this.maxPoolSize = maxPoolSize;
         this.dataDirectory = dataDirectory;
+        this.backupsDirectory = dataDirectory.resolve("backups");
     }
 
     @Override
@@ -675,26 +686,376 @@ public final class MariaDBStorageProvider implements StorageProvider {
         });
     }
 
-    // ==================== Backup Operations (TODO) ====================
+    // ==================== Backup Operations ====================
 
     @Override
     public CompletableFuture<String> createBackup(@Nullable String name) {
-        throw new UnsupportedOperationException("TODO");
+        return CompletableFuture.supplyAsync(() -> {
+            String backupName = name != null ? name :
+                "backup-" + java.time.LocalDateTime.now()
+                    .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"));
+
+            Path backupDir = backupsDirectory.resolve(backupName);
+
+            try {
+                Files.createDirectories(backupDir);
+
+                exportUsersToJson(backupDir);
+                exportGroupsToJson(backupDir);
+                exportTracksToJson(backupDir);
+
+                Logger.info("MariaDB backup created: " + backupName);
+                return backupName;
+
+            } catch (Exception e) {
+                Logger.severe("Failed to create MariaDB backup: " + backupName, e);
+                throw new RuntimeException("Backup failed", e);
+            }
+        });
+    }
+
+    private void exportUsersToJson(Path backupDir) throws SQLException, IOException {
+        Path usersDir = backupDir.resolve("users");
+        Files.createDirectories(usersDir);
+
+        try (Connection conn = dataSource.getConnection()) {
+            String userSql = "SELECT * FROM users";
+            try (Statement stmt = conn.createStatement();
+                 ResultSet rs = stmt.executeQuery(userSql)) {
+
+                while (rs.next()) {
+                    String uuid = rs.getString("uuid");
+                    JsonObject obj = new JsonObject();
+                    obj.addProperty("uuid", uuid);
+                    obj.addProperty("username", rs.getString("username"));
+                    obj.addProperty("primaryGroup", rs.getString("primary_group"));
+                    obj.addProperty("customPrefix", rs.getString("custom_prefix"));
+                    obj.addProperty("customSuffix", rs.getString("custom_suffix"));
+
+                    // Load nodes for this user
+                    JsonArray nodesArray = new JsonArray();
+                    String nodeSql = "SELECT * FROM user_nodes WHERE user_uuid = ?";
+                    try (PreparedStatement nodeStmt = conn.prepareStatement(nodeSql)) {
+                        nodeStmt.setString(1, uuid);
+                        ResultSet nodeRs = nodeStmt.executeQuery();
+
+                        while (nodeRs.next()) {
+                            JsonObject nodeObj = new JsonObject();
+                            nodeObj.addProperty("permission", nodeRs.getString("permission"));
+                            nodeObj.addProperty("value", nodeRs.getInt("value") == 1);
+                            Long expiry = nodeRs.getObject("expiry") != null ? nodeRs.getLong("expiry") : null;
+                            if (expiry != null) {
+                                nodeObj.addProperty("expiry", expiry);
+                            }
+                            nodeObj.addProperty("contexts", nodeRs.getString("contexts_json"));
+                            nodesArray.add(nodeObj);
+                        }
+                    }
+                    obj.add("nodes", nodesArray);
+
+                    Files.writeString(usersDir.resolve(uuid + ".json"), GSON.toJson(obj));
+                }
+            }
+        }
+    }
+
+    private void exportGroupsToJson(Path backupDir) throws SQLException, IOException {
+        Path groupsDir = backupDir.resolve("groups");
+        Files.createDirectories(groupsDir);
+
+        try (Connection conn = dataSource.getConnection()) {
+            String groupSql = "SELECT * FROM `groups`";
+            try (Statement stmt = conn.createStatement();
+                 ResultSet rs = stmt.executeQuery(groupSql)) {
+
+                while (rs.next()) {
+                    String name = rs.getString("name");
+                    JsonObject obj = new JsonObject();
+                    obj.addProperty("name", name);
+                    obj.addProperty("displayName", rs.getString("display_name"));
+                    obj.addProperty("weight", rs.getInt("weight"));
+                    obj.addProperty("prefix", rs.getString("prefix"));
+                    obj.addProperty("suffix", rs.getString("suffix"));
+                    obj.addProperty("prefixPriority", rs.getInt("prefix_priority"));
+                    obj.addProperty("suffixPriority", rs.getInt("suffix_priority"));
+
+                    // Load nodes for this group
+                    JsonArray nodesArray = new JsonArray();
+                    String nodeSql = "SELECT * FROM group_nodes WHERE group_name = ?";
+                    try (PreparedStatement nodeStmt = conn.prepareStatement(nodeSql)) {
+                        nodeStmt.setString(1, name);
+                        ResultSet nodeRs = nodeStmt.executeQuery();
+
+                        while (nodeRs.next()) {
+                            JsonObject nodeObj = new JsonObject();
+                            nodeObj.addProperty("permission", nodeRs.getString("permission"));
+                            nodeObj.addProperty("value", nodeRs.getInt("value") == 1);
+                            Long expiry = nodeRs.getObject("expiry") != null ? nodeRs.getLong("expiry") : null;
+                            if (expiry != null) {
+                                nodeObj.addProperty("expiry", expiry);
+                            }
+                            nodeObj.addProperty("contexts", nodeRs.getString("contexts_json"));
+                            nodesArray.add(nodeObj);
+                        }
+                    }
+                    obj.add("nodes", nodesArray);
+
+                    Files.writeString(groupsDir.resolve(name + ".json"), GSON.toJson(obj));
+                }
+            }
+        }
+    }
+
+    private void exportTracksToJson(Path backupDir) throws SQLException, IOException {
+        Path tracksDir = backupDir.resolve("tracks");
+        Files.createDirectories(tracksDir);
+
+        try (Connection conn = dataSource.getConnection()) {
+            String trackSql = "SELECT * FROM tracks";
+            try (Statement stmt = conn.createStatement();
+                 ResultSet rs = stmt.executeQuery(trackSql)) {
+
+                while (rs.next()) {
+                    String name = rs.getString("name");
+                    JsonObject obj = new JsonObject();
+                    obj.addProperty("name", name);
+                    obj.addProperty("groups", rs.getString("groups_json"));
+
+                    Files.writeString(tracksDir.resolve(name + ".json"), GSON.toJson(obj));
+                }
+            }
+        }
     }
 
     @Override
     public CompletableFuture<Boolean> restoreBackup(@NotNull String name) {
-        throw new UnsupportedOperationException("TODO");
+        return CompletableFuture.supplyAsync(() -> {
+            Path backupDir = backupsDirectory.resolve(name);
+
+            if (!Files.exists(backupDir)) {
+                Logger.warn("MariaDB backup not found: " + name);
+                return false;
+            }
+
+            try {
+                // Create safety backup before restore
+                createBackup("pre-restore-" + System.currentTimeMillis()).join();
+
+                try (Connection conn = dataSource.getConnection()) {
+                    conn.setAutoCommit(false);
+                    try {
+                        // Delete all existing data (FK order)
+                        try (Statement stmt = conn.createStatement()) {
+                            stmt.execute("DELETE FROM user_nodes");
+                            stmt.execute("DELETE FROM group_nodes");
+                            stmt.execute("DELETE FROM users");
+                            stmt.execute("DELETE FROM `groups`");
+                            stmt.execute("DELETE FROM tracks");
+                        }
+
+                        // Restore groups first (users may reference groups)
+                        restoreGroupsFromJson(conn, backupDir);
+                        restoreUsersFromJson(conn, backupDir);
+                        restoreTracksFromJson(conn, backupDir);
+
+                        conn.commit();
+                        Logger.info("MariaDB restored from backup: " + name);
+                        return true;
+
+                    } catch (Exception e) {
+                        conn.rollback();
+                        throw e;
+                    } finally {
+                        conn.setAutoCommit(true);
+                    }
+                }
+
+            } catch (Exception e) {
+                Logger.severe("Failed to restore MariaDB backup: " + name, e);
+                return false;
+            }
+        });
+    }
+
+    private void restoreUsersFromJson(Connection conn, Path backupDir) throws SQLException, IOException {
+        Path usersDir = backupDir.resolve("users");
+        if (!Files.exists(usersDir)) {
+            return;
+        }
+
+        String userSql = "INSERT INTO users (uuid, username, primary_group, custom_prefix, custom_suffix) VALUES (?, ?, ?, ?, ?)";
+        String nodeSql = "INSERT INTO user_nodes (user_uuid, permission, value, expiry, contexts_json) VALUES (?, ?, ?, ?, ?)";
+
+        List<Path> files;
+        try (var stream = Files.list(usersDir)) {
+            files = stream.filter(p -> p.toString().endsWith(".json")).toList();
+        }
+
+        for (Path file : files) {
+            String content = Files.readString(file);
+            JsonObject obj = JsonParser.parseString(content).getAsJsonObject();
+
+            try (PreparedStatement stmt = conn.prepareStatement(userSql)) {
+                stmt.setString(1, obj.get("uuid").getAsString());
+                stmt.setString(2, obj.has("username") && !obj.get("username").isJsonNull()
+                    ? obj.get("username").getAsString() : null);
+                stmt.setString(3, obj.has("primaryGroup") && !obj.get("primaryGroup").isJsonNull()
+                    ? obj.get("primaryGroup").getAsString() : "default");
+                stmt.setString(4, obj.has("customPrefix") && !obj.get("customPrefix").isJsonNull()
+                    ? obj.get("customPrefix").getAsString() : null);
+                stmt.setString(5, obj.has("customSuffix") && !obj.get("customSuffix").isJsonNull()
+                    ? obj.get("customSuffix").getAsString() : null);
+                stmt.executeUpdate();
+            }
+
+            if (obj.has("nodes") && obj.get("nodes").isJsonArray()) {
+                JsonArray nodes = obj.getAsJsonArray("nodes");
+                try (PreparedStatement stmt = conn.prepareStatement(nodeSql)) {
+                    for (int i = 0; i < nodes.size(); i++) {
+                        JsonObject node = nodes.get(i).getAsJsonObject();
+                        stmt.setString(1, obj.get("uuid").getAsString());
+                        stmt.setString(2, node.get("permission").getAsString());
+                        stmt.setInt(3, node.get("value").getAsBoolean() ? 1 : 0);
+                        stmt.setObject(4, node.has("expiry") && !node.get("expiry").isJsonNull()
+                            ? node.get("expiry").getAsLong() : null);
+                        stmt.setString(5, node.has("contexts") && !node.get("contexts").isJsonNull()
+                            ? node.get("contexts").getAsString() : "[]");
+                        stmt.addBatch();
+                    }
+                    stmt.executeBatch();
+                }
+            }
+        }
+    }
+
+    private void restoreGroupsFromJson(Connection conn, Path backupDir) throws SQLException, IOException {
+        Path groupsDir = backupDir.resolve("groups");
+        if (!Files.exists(groupsDir)) {
+            return;
+        }
+
+        String groupSql = "INSERT INTO `groups` (name, display_name, weight, prefix, suffix, prefix_priority, suffix_priority) VALUES (?, ?, ?, ?, ?, ?, ?)";
+        String nodeSql = "INSERT INTO group_nodes (group_name, permission, value, expiry, contexts_json) VALUES (?, ?, ?, ?, ?)";
+
+        List<Path> files;
+        try (var stream = Files.list(groupsDir)) {
+            files = stream.filter(p -> p.toString().endsWith(".json")).toList();
+        }
+
+        for (Path file : files) {
+            String content = Files.readString(file);
+            JsonObject obj = JsonParser.parseString(content).getAsJsonObject();
+
+            try (PreparedStatement stmt = conn.prepareStatement(groupSql)) {
+                stmt.setString(1, obj.get("name").getAsString());
+                stmt.setString(2, obj.has("displayName") && !obj.get("displayName").isJsonNull()
+                    ? obj.get("displayName").getAsString() : null);
+                stmt.setInt(3, obj.has("weight") && !obj.get("weight").isJsonNull()
+                    ? obj.get("weight").getAsInt() : 0);
+                stmt.setString(4, obj.has("prefix") && !obj.get("prefix").isJsonNull()
+                    ? obj.get("prefix").getAsString() : null);
+                stmt.setString(5, obj.has("suffix") && !obj.get("suffix").isJsonNull()
+                    ? obj.get("suffix").getAsString() : null);
+                stmt.setInt(6, obj.has("prefixPriority") && !obj.get("prefixPriority").isJsonNull()
+                    ? obj.get("prefixPriority").getAsInt() : 0);
+                stmt.setInt(7, obj.has("suffixPriority") && !obj.get("suffixPriority").isJsonNull()
+                    ? obj.get("suffixPriority").getAsInt() : 0);
+                stmt.executeUpdate();
+            }
+
+            if (obj.has("nodes") && obj.get("nodes").isJsonArray()) {
+                JsonArray nodes = obj.getAsJsonArray("nodes");
+                try (PreparedStatement stmt = conn.prepareStatement(nodeSql)) {
+                    for (int i = 0; i < nodes.size(); i++) {
+                        JsonObject node = nodes.get(i).getAsJsonObject();
+                        stmt.setString(1, obj.get("name").getAsString());
+                        stmt.setString(2, node.get("permission").getAsString());
+                        stmt.setInt(3, node.get("value").getAsBoolean() ? 1 : 0);
+                        stmt.setObject(4, node.has("expiry") && !node.get("expiry").isJsonNull()
+                            ? node.get("expiry").getAsLong() : null);
+                        stmt.setString(5, node.has("contexts") && !node.get("contexts").isJsonNull()
+                            ? node.get("contexts").getAsString() : "[]");
+                        stmt.addBatch();
+                    }
+                    stmt.executeBatch();
+                }
+            }
+        }
+    }
+
+    private void restoreTracksFromJson(Connection conn, Path backupDir) throws SQLException, IOException {
+        Path tracksDir = backupDir.resolve("tracks");
+        if (!Files.exists(tracksDir)) {
+            return;
+        }
+
+        String trackSql = "INSERT INTO tracks (name, groups_json) VALUES (?, ?)";
+
+        List<Path> files;
+        try (var stream = Files.list(tracksDir)) {
+            files = stream.filter(p -> p.toString().endsWith(".json")).toList();
+        }
+
+        for (Path file : files) {
+            String content = Files.readString(file);
+            JsonObject obj = JsonParser.parseString(content).getAsJsonObject();
+
+            try (PreparedStatement stmt = conn.prepareStatement(trackSql)) {
+                stmt.setString(1, obj.get("name").getAsString());
+                stmt.setString(2, obj.has("groups") && !obj.get("groups").isJsonNull()
+                    ? obj.get("groups").getAsString() : "[]");
+                stmt.executeUpdate();
+            }
+        }
     }
 
     @Override
     public CompletableFuture<List<String>> listBackups() {
-        throw new UnsupportedOperationException("TODO");
+        return CompletableFuture.supplyAsync(() -> {
+            List<String> backups = new ArrayList<>();
+
+            try {
+                if (Files.exists(backupsDirectory)) {
+                    try (var stream = Files.list(backupsDirectory)) {
+                        stream.filter(Files::isDirectory)
+                              .map(p -> p.getFileName().toString())
+                              .sorted(Comparator.reverseOrder())
+                              .forEach(backups::add);
+                    }
+                }
+            } catch (IOException e) {
+                Logger.severe("Failed to list MariaDB backups", e);
+            }
+
+            return backups;
+        });
     }
 
     @Override
     public CompletableFuture<Boolean> deleteBackup(@NotNull String name) {
-        throw new UnsupportedOperationException("TODO");
+        return CompletableFuture.supplyAsync(() -> {
+            Path backupDir = backupsDirectory.resolve(name);
+
+            if (!Files.exists(backupDir)) {
+                return false;
+            }
+
+            try {
+                Files.walk(backupDir)
+                     .sorted(Comparator.reverseOrder())
+                     .forEach(path -> {
+                         try {
+                             Files.delete(path);
+                         } catch (IOException e) {
+                             Logger.warn("Failed to delete: " + path);
+                         }
+                     });
+                return true;
+            } catch (IOException e) {
+                Logger.severe("Failed to delete MariaDB backup: " + name, e);
+                return false;
+            }
+        });
     }
 
     // ==================== Helper Methods ====================
