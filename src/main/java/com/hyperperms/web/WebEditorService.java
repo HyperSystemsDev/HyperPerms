@@ -78,7 +78,9 @@ public final class WebEditorService {
                             String sessionId = obj.get("sessionId").getAsString();
                             String editorUrl = obj.get("url").getAsString();
                             String expiresAt = obj.has("expiresAt") ? obj.get("expiresAt").getAsString() : "";
-                            return new SessionCreateResponse(sessionId, editorUrl, expiresAt);
+                            String wsUrl = obj.has("wsUrl") && !obj.get("wsUrl").isJsonNull()
+                                    ? obj.get("wsUrl").getAsString() : null;
+                            return new SessionCreateResponse(sessionId, editorUrl, expiresAt, wsUrl);
                         } catch (Exception e) {
                             Logger.warn("Failed to parse session response: " + e.getMessage());
                             return SessionCreateResponse.error("Invalid response from server");
