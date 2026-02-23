@@ -11,6 +11,7 @@ import com.hyperperms.util.Logger;
 import com.hyperperms.web.dto.Change;
 import com.hyperperms.web.dto.SessionCreateResponse;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 import java.net.URI;
 import java.net.URLEncoder;
@@ -26,6 +27,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 
 /**
  * Service for communicating with the web editor API.
@@ -37,6 +40,8 @@ public final class WebEditorService {
 
     private final HyperPerms hyperPerms;
     private final HttpClient httpClient;
+    private final ScheduledExecutorService wsScheduler;
+    private volatile WebSocketSessionClient activeWsClient;
 
     public WebEditorService(@NotNull HyperPerms hyperPerms) {
         this.hyperPerms = hyperPerms;
@@ -44,6 +49,46 @@ public final class WebEditorService {
                 .version(HttpClient.Version.HTTP_1_1)
                 .connectTimeout(Duration.ofSeconds(hyperPerms.getConfig().getWebEditorTimeoutSeconds()))
                 .build();
+        this.wsScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "HyperPerms-WebSocket");
+            t.setDaemon(true);
+            return t;
+        });
+    }
+
+    /**
+     * Connects the WebSocket client for realtime sync.
+     *
+     * @param sessionId the session ID
+     * @param wsUrl     the WebSocket URL from the session response
+     */
+    public void connectWebSocket(@NotNull String sessionId, @NotNull String wsUrl) {
+        disconnectWebSocket();
+        WebSocketSessionClient client = new WebSocketSessionClient(
+                hyperPerms, httpClient, sessionId, wsUrl, wsScheduler);
+        activeWsClient = client;
+        client.connect();
+    }
+
+    /**
+     * Disconnects the active WebSocket client.
+     */
+    public void disconnectWebSocket() {
+        WebSocketSessionClient client = activeWsClient;
+        if (client != null) {
+            client.disconnect();
+            activeWsClient = null;
+        }
+    }
+
+    /**
+     * Gets the active WebSocket client, if connected.
+     *
+     * @return the active client, or null if not connected
+     */
+    @Nullable
+    public WebSocketSessionClient getActiveWsClient() {
+        return activeWsClient;
     }
 
     /**

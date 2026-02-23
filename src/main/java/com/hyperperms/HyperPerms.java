@@ -428,6 +428,11 @@ public final class HyperPerms implements HyperPermsAPI {
             placeholderApiIntegration.unregister();
         }
 
+        // Disconnect WebSocket before shutting down scheduler
+        if (webEditorService != null) {
+            webEditorService.disconnectWebSocket();
+        }
+
         // Stop scheduled tasks FIRST to prevent new storage executor submissions
         if (expiryTask != null) {
             expiryTask.cancel(true);

@@ -72,6 +72,13 @@ public class EditorSubCommand extends AbstractCommand {
                                 .insert(Message.raw(" and enter your session ID manually."))
                         );
 
+                        // Connect WebSocket if available and enabled
+                        if (response.getWsUrl() != null && hyperPerms.getConfig().isWebEditorWebsocketEnabled()) {
+                            webEditorService.connectWebSocket(response.getSessionId(), response.getWsUrl());
+                            ctx.sender().sendMessage(Message.raw("Live connection established - changes sync in realtime.")
+                                    .color(new java.awt.Color(0x55FFFF)));
+                        }
+
                         // Log full URL to console for easy copying
                         Logger.info("Web editor session created: " + response.getSessionId());
                         Logger.info("Editor URL: " + editorUrl);
