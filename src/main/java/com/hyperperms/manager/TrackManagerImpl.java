@@ -1,6 +1,10 @@
 package com.hyperperms.manager;
 
 import com.hyperperms.api.HyperPermsAPI.TrackManager;
+import com.hyperperms.api.events.EventBus;
+import com.hyperperms.api.events.TrackCreateEvent;
+import com.hyperperms.api.events.TrackDeleteEvent;
+import com.hyperperms.api.events.TrackModifyEvent;
 import com.hyperperms.model.Track;
 import com.hyperperms.storage.StorageProvider;
 import com.hyperperms.util.Logger;
@@ -17,10 +21,12 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class TrackManagerImpl implements TrackManager {
 
     private final StorageProvider storage;
+    private final EventBus eventBus;
     private final Map<String, Track> loadedTracks = new ConcurrentHashMap<>();
 
-    public TrackManagerImpl(@NotNull StorageProvider storage) {
+    public TrackManagerImpl(@NotNull StorageProvider storage, @NotNull EventBus eventBus) {
         this.storage = storage;
+        this.eventBus = eventBus;
     }
 
     @Override
@@ -47,6 +53,14 @@ public final class TrackManagerImpl implements TrackManager {
     @NotNull
     public Track createTrack(@NotNull String name) {
         String lowerName = name.toLowerCase();
+
+        // Fire PRE event
+        TrackCreateEvent preEvent = new TrackCreateEvent(lowerName);
+        eventBus.fire(preEvent);
+        if (preEvent.isCancelled()) {
+            throw new IllegalStateException("Track creation cancelled by event handler: " + name);
+        }
+
         Track track = new Track(lowerName);
 
         // putIfAbsent is atomic - prevents concurrent duplicate creation
@@ -57,20 +71,48 @@ public final class TrackManagerImpl implements TrackManager {
 
         storage.saveTrack(track);
         Logger.info("Created track: " + name);
+
+        // Fire POST event
+        eventBus.fire(new TrackCreateEvent(track));
+
         return track;
     }
 
     @Override
     public CompletableFuture<Void> deleteTrack(@NotNull String name) {
         String lowerName = name.toLowerCase();
+        Track track = loadedTracks.get(lowerName);
+
+        // Fire PRE event if track exists
+        if (track != null) {
+            TrackDeleteEvent preEvent = new TrackDeleteEvent(track);
+            eventBus.fire(preEvent);
+            if (preEvent.isCancelled()) {
+                return CompletableFuture.completedFuture(null);
+            }
+        }
+
         loadedTracks.remove(lowerName);
-        return storage.deleteTrack(lowerName);
+        return storage.deleteTrack(lowerName).thenRun(() -> {
+            // Fire POST event
+            eventBus.fire(new TrackDeleteEvent(lowerName));
+        });
     }
 
     @Override
     public CompletableFuture<Void> saveTrack(@NotNull Track track) {
+        // Capture old groups for modify event
+        Track existing = loadedTracks.get(track.getName());
+        List<String> oldGroups = existing != null ? List.copyOf(existing.getGroups()) : List.of();
+
         loadedTracks.put(track.getName(), track);
-        return storage.saveTrack(track);
+        return storage.saveTrack(track).thenRun(() -> {
+            // Fire modify event if groups changed
+            List<String> newGroups = track.getGroups();
+            if (!oldGroups.equals(newGroups)) {
+                eventBus.fire(new TrackModifyEvent(track, oldGroups, newGroups));
+            }
+        });
     }
 
     @Override

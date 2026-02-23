@@ -297,6 +297,10 @@ public final class HyperPermsConfig {
         webEditor.addProperty("url", "https://www.hyperperms.com");
         webEditor.addProperty("apiUrl", "");  // Empty = use main URL for backward compatibility
         webEditor.addProperty("timeoutSeconds", 10);
+        webEditor.addProperty("websocketEnabled", true);
+        webEditor.addProperty("websocketReconnectMaxAttempts", 10);
+        webEditor.addProperty("websocketReconnectMaxDelaySeconds", 30);
+        webEditor.addProperty("websocketPingTimeoutSeconds", 90);
         root.add("webEditor", webEditor);
 
         // Tab list settings
@@ -594,6 +598,43 @@ public final class HyperPermsConfig {
      */
     public int getWebEditorTimeoutSeconds() {
         return getNestedInt("webEditor", "timeoutSeconds", 10);
+    }
+
+    /**
+     * Checks if WebSocket realtime sync is enabled.
+     *
+     * @return true if WebSocket is enabled
+     */
+    public boolean isWebEditorWebsocketEnabled() {
+        return getNestedBoolean("webEditor", "websocketEnabled", true);
+    }
+
+    /**
+     * Gets the maximum number of WebSocket reconnect attempts.
+     *
+     * @return the max reconnect attempts
+     */
+    public int getWebEditorWebsocketReconnectMaxAttempts() {
+        return getNestedInt("webEditor", "websocketReconnectMaxAttempts", 10);
+    }
+
+    /**
+     * Gets the maximum delay in seconds between WebSocket reconnect attempts.
+     *
+     * @return the max reconnect delay in seconds
+     */
+    public int getWebEditorWebsocketReconnectMaxDelaySeconds() {
+        return getNestedInt("webEditor", "websocketReconnectMaxDelaySeconds", 30);
+    }
+
+    /**
+     * Gets the WebSocket ping timeout in seconds.
+     * If no ping is received within this period, the connection is considered dead.
+     *
+     * @return the ping timeout in seconds
+     */
+    public int getWebEditorWebsocketPingTimeoutSeconds() {
+        return getNestedInt("webEditor", "websocketPingTimeoutSeconds", 90);
     }
 
     // ==================== Faction Integration Settings ====================

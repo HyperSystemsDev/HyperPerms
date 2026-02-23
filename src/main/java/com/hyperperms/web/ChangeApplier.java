@@ -21,10 +21,39 @@ import java.util.UUID;
  */
 public final class ChangeApplier {
 
+    private static final ThreadLocal<Boolean> applyingFromWebSocket = ThreadLocal.withInitial(() -> false);
+
+    /**
+     * Checks if the current thread is applying changes from a WebSocket message.
+     * EventBus listeners can use this to avoid echo loops.
+     *
+     * @return true if changes are being applied from a WebSocket message
+     */
+    public static boolean isApplyingFromWebSocket() {
+        return applyingFromWebSocket.get();
+    }
+
     private final HyperPerms hyperPerms;
 
     public ChangeApplier(@NotNull HyperPerms hyperPerms) {
         this.hyperPerms = hyperPerms;
+    }
+
+    /**
+     * Applies changes originating from a WebSocket message.
+     * Sets a thread-local flag so EventBus listeners can detect the source
+     * and avoid echo loops.
+     *
+     * @param changes The changes to apply
+     * @return Result with success/failure counts
+     */
+    public ApplyResult applyChangesFromWebSocket(@NotNull List<Change> changes) {
+        applyingFromWebSocket.set(true);
+        try {
+            return applyChanges(changes);
+        } finally {
+            applyingFromWebSocket.set(false);
+        }
     }
 
     /**

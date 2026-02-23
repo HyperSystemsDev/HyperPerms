@@ -217,7 +217,7 @@ public final class HyperPerms implements HyperPermsAPI {
 
             // Initialize managers with event bus
             groupManager = new GroupManagerImpl(storage, cacheInvalidator, eventBus);
-            trackManager = new TrackManagerImpl(storage);
+            trackManager = new TrackManagerImpl(storage, eventBus);
             userManager = new UserManagerImpl(storage, cache, eventBus, config.getDefaultGroup());
 
             // Load data
@@ -426,6 +426,11 @@ public final class HyperPerms implements HyperPermsAPI {
         // Unregister PlaceholderAPI expansion
         if (placeholderApiIntegration != null) {
             placeholderApiIntegration.unregister();
+        }
+
+        // Disconnect WebSocket before shutting down scheduler
+        if (webEditorService != null) {
+            webEditorService.disconnectWebSocket();
         }
 
         // Stop scheduled tasks FIRST to prevent new storage executor submissions

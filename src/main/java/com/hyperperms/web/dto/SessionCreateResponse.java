@@ -11,16 +11,19 @@ public final class SessionCreateResponse {
     private final String sessionId;
     private final String url;
     private final String expiresAt;
+    private final String wsUrl;
     private final String error;
 
     public SessionCreateResponse(
             @NotNull String sessionId,
             @NotNull String url,
-            @NotNull String expiresAt
+            @NotNull String expiresAt,
+            @Nullable String wsUrl
     ) {
         this.sessionId = sessionId;
         this.url = url;
         this.expiresAt = expiresAt;
+        this.wsUrl = wsUrl;
         this.error = null;
     }
 
@@ -28,6 +31,7 @@ public final class SessionCreateResponse {
         this.sessionId = null;
         this.url = null;
         this.expiresAt = null;
+        this.wsUrl = null;
         this.error = error;
     }
 
@@ -51,6 +55,16 @@ public final class SessionCreateResponse {
     @Nullable
     public String getExpiresAt() {
         return expiresAt;
+    }
+
+    /**
+     * Gets the WebSocket URL for realtime sync.
+     *
+     * @return the WebSocket URL, or null if not available
+     */
+    @Nullable
+    public String getWsUrl() {
+        return wsUrl;
     }
 
     @Nullable
