@@ -19,6 +19,7 @@ data/
 # Temp
 *.log
 .claude/
+.worktrees/
 CLAUDE.md
 .serena/
 .playwright-mcp/
