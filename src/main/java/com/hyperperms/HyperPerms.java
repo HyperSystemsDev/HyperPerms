@@ -217,7 +217,7 @@ public final class HyperPerms implements HyperPermsAPI {
 
             // Initialize managers with event bus
             groupManager = new GroupManagerImpl(storage, cacheInvalidator, eventBus);
-            trackManager = new TrackManagerImpl(storage);
+            trackManager = new TrackManagerImpl(storage, eventBus);
             userManager = new UserManagerImpl(storage, cache, eventBus, config.getDefaultGroup());
 
             // Load data

@@ -72,6 +72,21 @@ public interface HyperPermsEvent {
         DATA_RELOAD,
 
         /**
+         * Fired when a track is created.
+         */
+        TRACK_CREATE,
+
+        /**
+         * Fired when a track is deleted.
+         */
+        TRACK_DELETE,
+
+        /**
+         * Fired when a track is modified.
+         */
+        TRACK_MODIFY,
+
+        /**
          * Fired when a user is promoted along a track.
          */
         TRACK_PROMOTION,
